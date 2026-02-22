@@ -1,0 +1,11 @@
+{
+  "name": "voice-patient-pdf",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@sparticuz/chromium": "^123.0.0",
+    "marked": "^12.0.0",
+    "playwright-core": "^1.46.0"
+  }
+}
