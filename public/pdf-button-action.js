@@ -111,7 +111,7 @@
     if (!btn) return;
 
     if (pdfIsAvailable()) {
-      btn.textContent = "View / Download PDF";
+      btn.textContent = "Download PDF";
       btn.dataset.mode = "view";
     } else {
       btn.textContent = "Create PDF";
