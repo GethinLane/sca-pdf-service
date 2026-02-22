@@ -1,7 +1,6 @@
 import { chromium as playwrightChromium } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 import { marked } from "marked";
-import path from "path";
 
 const ALLOWED_ORIGINS = new Set([
   "https://www.scarevision.ai",
@@ -68,25 +67,66 @@ function buildHtmlDocument({ title, logoUrl, bodyHtml }) {
 </html>`;
 }
 
+function mkDebugId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+async function readJsonBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return { raw, json: JSON.parse(raw) };
+}
+
 export default async function handler(req, res) {
-  // CORS headers for every response (including errors)
+  const debugId = mkDebugId();
+  const t0 = nowMs();
+  const debug = String(req?.query?.debug || "") === "1";
+
+  const log = (...args) => console.log(`[render-pdf ${debugId}]`, ...args);
+
+  // Always set CORS headers
   setCors(req, res);
+
+  log("START", {
+    method: req.method,
+    url: req.url,
+    origin: req.headers.origin,
+    ua: req.headers["user-agent"],
+    debug,
+  });
 
   // Preflight
   if (req.method === "OPTIONS") {
+    log("OPTIONS preflight -> 204");
     res.status(204).end();
     return;
   }
 
   if (req.method !== "POST") {
-    res.status(405).json({ error: "Use POST" });
+    log("Reject non-POST -> 405");
+    res.status(405).json({ error: "Use POST", debugId });
     return;
   }
 
+  let browser = null;
+  let page = null;
+
   try {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    // Read body
+    const tRead0 = nowMs();
+    const { raw, json: body } = await readJsonBody(req);
+    const tRead1 = nowMs();
+
+    log("BODY read", {
+      bytes: raw.length,
+      readMs: tRead1 - tRead0,
+      keys: Object.keys(body || {}),
+    });
 
     const title = body.title || "Consultation Feedback Report";
     const logoUrl = body.logoUrl || "";
@@ -94,63 +134,120 @@ export default async function handler(req, res) {
 
     const markdown = String(body.markdown || "");
     const html = String(body.html || "");
+
+    log("INPUT lengths", {
+      titleLen: String(title).length,
+      logoUrlLen: String(logoUrl).length,
+      markdownLen: markdown.length,
+      htmlLen: html.length,
+    });
+
     if (!html && !markdown) {
-      res.status(400).json({ error: "Missing 'html' or 'markdown' in request body" });
+      log("ERROR missing html/markdown");
+      res.status(400).json({ error: "Missing 'html' or 'markdown' in request body", debugId });
       return;
     }
     if (markdown.length > 200_000 || html.length > 400_000) {
-      res.status(413).json({ error: "Payload too large" });
+      log("ERROR payload too large");
+      res.status(413).json({ error: "Payload too large", debugId });
       return;
     }
 
+    // Build HTML
+    const tHtml0 = nowMs();
     const bodyHtml = html
       ? html
       : marked.parse(markdown, { gfm: true, breaks: true });
-
     const fullHtml = buildHtmlDocument({ title, logoUrl, bodyHtml });
+    const tHtml1 = nowMs();
 
-    // Optional: prevent GPU-related hangs (if supported by your chromium package version)
-    if (typeof chromium.setGraphicsMode === "function") {
-      chromium.setGraphicsMode(false);
-    }
+    log("HTML built", {
+      bodyHtmlLen: bodyHtml.length,
+      fullHtmlLen: fullHtml.length,
+      buildMs: tHtml1 - tHtml0,
+    });
 
-    const executablePath = await chromium.executablePath();
-    const execDir = path.dirname(executablePath);
-
-    // ✅ CRITICAL FIX: tell the loader where the extracted libs are (libnss3.so etc.)
-    process.env.LD_LIBRARY_PATH = execDir;
+    // Launch Chromium
+    const tLaunch0 = nowMs();
 
     const headless =
       typeof chromium.headless === "boolean"
         ? chromium.headless
         : String(chromium.headless).toLowerCase() !== "false";
 
-    const browser = await playwrightChromium.launch({
+    const executablePath = await chromium.executablePath();
+
+    log("Chromium config", {
+      headless,
+      executablePath,
+      argsCount: Array.isArray(chromium.args) ? chromium.args.length : null,
+      chromiumHeadlessType: typeof chromium.headless,
+      chromiumHeadlessValue: chromium.headless,
+    });
+
+    browser = await playwrightChromium.launch({
       args: chromium.args,
       executablePath,
       headless,
     });
 
-    const page = await browser.newPage();
+    const tLaunch1 = nowMs();
+    log("Chromium launched", { launchMs: tLaunch1 - tLaunch0 });
 
-    // networkidle can sometimes hang if something keeps a connection open;
-    // load is often enough for PDFs
+    page = await browser.newPage();
+
+    // Render
+    const tContent0 = nowMs();
     await page.setContent(fullHtml, { waitUntil: "load" });
+    const tContent1 = nowMs();
+    log("setContent done", { setContentMs: tContent1 - tContent0 });
 
+    // PDF
+    const tPdf0 = nowMs();
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
     });
+    const tPdf1 = nowMs();
 
-    await page.close();
-    await browser.close();
+    log("PDF generated", {
+      pdfBytes: pdfBuffer?.length,
+      pdfMs: tPdf1 - tPdf0,
+      totalMs: tPdf1 - t0,
+    });
 
+    // Return
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Cache-Control", "no-store");
     res.status(200).send(pdfBuffer);
   } catch (err) {
-    res.status(500).json({ error: err?.message || "PDF generation failed" });
+    log("ERROR", {
+      message: err?.message,
+      name: err?.name,
+      stack: err?.stack,
+      totalMs: nowMs() - t0,
+    });
+
+    // Make sure we return JSON even on failures so browser doesn't look "hung"
+    const payload = { error: err?.message || "PDF generation failed", debugId };
+    if (debug) {
+      payload.hint =
+        "Check Vercel Function Logs for [render-pdf " + debugId + "] entries.";
+    }
+    res.status(500).json(payload);
+  } finally {
+    try {
+      if (page) await page.close();
+    } catch (e) {
+      log("WARN page.close failed", e?.message || e);
+    }
+    try {
+      if (browser) await browser.close();
+    } catch (e) {
+      log("WARN browser.close failed", e?.message || e);
+    }
+    log("END", { totalMs: nowMs() - t0 });
   }
 }
