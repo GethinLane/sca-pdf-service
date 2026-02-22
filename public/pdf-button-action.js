@@ -106,18 +106,23 @@
     a.remove();
   }
 
-  function syncButtonUI() {
-    const btn = $("downloadPdfBtn");
-    if (!btn) return;
+function syncButtonUI() {
+  const btn = document.getElementById("downloadPdfBtn");
+  if (!btn) return;
 
-    if (pdfIsAvailable()) {
-      btn.textContent = "Download PDF";
-      btn.dataset.mode = "view";
-    } else {
-      btn.textContent = "Create PDF";
-      btn.dataset.mode = "create";
-    }
+  const label = btn.querySelector(".btn-label");
+  const icon = btn.querySelector("i");
+
+  if (pdfIsAvailable()) {
+    if (label) label.textContent = "View / Download";
+    if (icon) icon.className = "fa-solid fa-download";
+    btn.dataset.mode = "view";
+  } else {
+    if (label) label.textContent = "Create PDF";
+    if (icon) icon.className = "fa-solid fa-download";
+    btn.dataset.mode = "create";
   }
+}
 
   async function createPdf() {
     const btn = $("downloadPdfBtn");
@@ -142,7 +147,8 @@
 
     try {
       btn.disabled = true;
-      btn.textContent = "Creating PDF…";
+      const label = btn.querySelector(".btn-label");
+if (label) label.textContent = "Creating…";
 
       const t0 = performance.now();
       const blob = await postPdf(cfg.pdfService, {
