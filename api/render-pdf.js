@@ -2,6 +2,22 @@ import { chromium as playwrightChromium } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 import { marked } from "marked";
 
+const ALLOWED_ORIGINS = new Set([
+  "https://www.scarevision.ai",
+  "https://scarevision.ai",
+]);
+
+function setCors(req, res) {
+  const origin = req.headers.origin || "";
+  if (ALLOWED_ORIGINS.has(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+  }
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Max-Age", "86400");
+}
+
 function escapeHtml(s = "") {
   return String(s)
     .replaceAll("&", "&amp;")
@@ -52,6 +68,15 @@ function buildHtmlDocument({ title, logoUrl, bodyHtml }) {
 }
 
 export default async function handler(req, res) {
+  // Always set CORS headers (important for both success + error responses)
+  setCors(req, res);
+
+  // Handle preflight
+  if (req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+
   if (req.method !== "POST") {
     res.status(405).json({ error: "Use POST" });
     return;
@@ -66,25 +91,39 @@ export default async function handler(req, res) {
     const logoUrl = body.logoUrl || "";
     const filename = body.filename || "consultation-feedback.pdf";
 
+    // Simple payload guard to reduce abuse/accidents
+    const markdown = String(body.markdown || "");
+    const html = String(body.html || "");
+    if (!html && !markdown) {
+      res.status(400).json({ error: "Missing 'html' or 'markdown' in request body" });
+      return;
+    }
+    if (markdown.length > 200_000 || html.length > 400_000) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+
     const bodyHtml = body.html
-      ? String(body.html)
-      : marked.parse(String(body.markdown || ""), { gfm: true, breaks: true });
+      ? html
+      : marked.parse(markdown, { gfm: true, breaks: true });
 
     const fullHtml = buildHtmlDocument({ title, logoUrl, bodyHtml });
 
     const browser = await playwrightChromium.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
-      headless: chromium.headless
+      headless: chromium.headless,
     });
 
     const page = await browser.newPage();
+
+    // Load document (wait for remote logo/fonts)
     await page.setContent(fullHtml, { waitUntil: "networkidle" });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
-      preferCSSPageSize: true
+      preferCSSPageSize: true,
     });
 
     await page.close();
