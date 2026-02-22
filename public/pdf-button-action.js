@@ -134,20 +134,11 @@
         downloadBtn.textContent = "Preparing PDF…";
 
         // 1) Get grading text (use cache if available)
-        let gradingText = cachedGradingText;
-
-        if (!gradingText.trim()) {
-          downloadBtn.textContent = "Fetching grading…";
-          const g0 = performance.now();
-          const gData = await fetchJson(gradingUrl);
-          const g1 = performance.now();
-          console.log("[pdf] grading fetch ms:", Math.round(g1 - g0), "status ok");
-
-          gradingText = String(gData?.gradingText || "");
-          if (!gradingText.trim()) throw new Error("Grading text was empty.");
-
-          cachedGradingText = gradingText;
-        }
+const gradingText = String(window.__gradingText || "");
+if (!gradingText.trim()) {
+  alert("Grading isn't ready yet. Please wait a moment and try again.");
+  return;
+}
 
         // 2) Generate PDF (server-side, real text)
         downloadBtn.textContent = "Generating PDF…";
