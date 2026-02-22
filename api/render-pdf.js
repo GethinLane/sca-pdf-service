@@ -109,11 +109,16 @@ export default async function handler(req, res) {
 
     const fullHtml = buildHtmlDocument({ title, logoUrl, bodyHtml });
 
-    const browser = await playwrightChromium.launch({
-      args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-    });
+const headless =
+  typeof chromium.headless === "boolean"
+    ? chromium.headless
+    : String(chromium.headless).toLowerCase() !== "false";
+
+const browser = await playwrightChromium.launch({
+  args: chromium.args,
+  executablePath: await chromium.executablePath(),
+  headless
+});
 
     const page = await browser.newPage();
 
