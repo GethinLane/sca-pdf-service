@@ -123,9 +123,7 @@
       }
 
       const filename = `grading-${sessionId}.pdf`;
-      const gradingUrl = `${cfg.gradingBase}/api/get-grading?sessionId=${encodeURIComponent(
-        sessionId
-      )}&force=1`;
+const gradingUrl = `${cfg.gradingBase}/api/get-grading?sessionId=${encodeURIComponent(sessionId)}`;
 
       const total0 = performance.now();
 
