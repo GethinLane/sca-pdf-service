@@ -85,8 +85,6 @@ async function readJsonBody(req) {
 export default async function handler(req, res) {
   const debugId = mkDebugId();
   const t0 = nowMs();
-  const debug = String(req?.query?.debug || "") === "1";
-
   const log = (...args) => console.log(`[render-pdf ${debugId}]`, ...args);
 
   // Always set CORS headers
@@ -97,7 +95,6 @@ export default async function handler(req, res) {
     url: req.url,
     origin: req.headers.origin,
     ua: req.headers["user-agent"],
-    debug,
   });
 
   // Preflight
@@ -147,6 +144,7 @@ export default async function handler(req, res) {
       res.status(400).json({ error: "Missing 'html' or 'markdown' in request body", debugId });
       return;
     }
+
     if (markdown.length > 200_000 || html.length > 400_000) {
       log("ERROR payload too large");
       res.status(413).json({ error: "Payload too large", debugId });
@@ -155,9 +153,7 @@ export default async function handler(req, res) {
 
     // Build HTML
     const tHtml0 = nowMs();
-    const bodyHtml = html
-      ? html
-      : marked.parse(markdown, { gfm: true, breaks: true });
+    const bodyHtml = html ? html : marked.parse(markdown, { gfm: true, breaks: true });
     const fullHtml = buildHtmlDocument({ title, logoUrl, bodyHtml });
     const tHtml1 = nowMs();
 
@@ -167,9 +163,7 @@ export default async function handler(req, res) {
       buildMs: tHtml1 - tHtml0,
     });
 
-    // Launch Chromium
-    const tLaunch0 = nowMs();
-
+    // Chromium config
     const headless =
       typeof chromium.headless === "boolean"
         ? chromium.headless
@@ -185,13 +179,15 @@ export default async function handler(req, res) {
       chromiumHeadlessValue: chromium.headless,
     });
 
+    // Launch Chromium
+    const tLaunch0 = nowMs();
     browser = await playwrightChromium.launch({
       args: chromium.args,
       executablePath,
       headless,
     });
-
     const tLaunch1 = nowMs();
+
     log("Chromium launched", { launchMs: tLaunch1 - tLaunch0 });
 
     page = await browser.newPage();
@@ -200,6 +196,7 @@ export default async function handler(req, res) {
     const tContent0 = nowMs();
     await page.setContent(fullHtml, { waitUntil: "load" });
     const tContent1 = nowMs();
+
     log("setContent done", { setContentMs: tContent1 - tContent0 });
 
     // PDF
@@ -230,13 +227,8 @@ export default async function handler(req, res) {
       totalMs: nowMs() - t0,
     });
 
-    // Make sure we return JSON even on failures so browser doesn't look "hung"
-    const payload = { error: err?.message || "PDF generation failed", debugId };
-    if (debug) {
-      payload.hint =
-        "Check Vercel Function Logs for [render-pdf " + debugId + "] entries.";
-    }
-    res.status(500).json(payload);
+    // Always return JSON with debugId so you can correlate logs
+    res.status(500).json({ error: err?.message || "PDF generation failed", debugId });
   } finally {
     try {
       if (page) await page.close();
