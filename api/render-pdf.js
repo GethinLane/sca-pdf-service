@@ -1,6 +1,7 @@
 import { chromium as playwrightChromium } from "playwright-core";
 import chromium from "@sparticuz/chromium";
 import { marked } from "marked";
+import path from "path";
 
 const ALLOWED_ORIGINS = new Set([
   "https://www.scarevision.ai",
@@ -68,10 +69,10 @@ function buildHtmlDocument({ title, logoUrl, bodyHtml }) {
 }
 
 export default async function handler(req, res) {
-  // Always set CORS headers (important for both success + error responses)
+  // CORS headers for every response (including errors)
   setCors(req, res);
 
-  // Handle preflight
+  // Preflight
   if (req.method === "OPTIONS") {
     res.status(204).end();
     return;
@@ -91,7 +92,6 @@ export default async function handler(req, res) {
     const logoUrl = body.logoUrl || "";
     const filename = body.filename || "consultation-feedback.pdf";
 
-    // Simple payload guard to reduce abuse/accidents
     const markdown = String(body.markdown || "");
     const html = String(body.html || "");
     if (!html && !markdown) {
@@ -103,27 +103,39 @@ export default async function handler(req, res) {
       return;
     }
 
-    const bodyHtml = body.html
+    const bodyHtml = html
       ? html
       : marked.parse(markdown, { gfm: true, breaks: true });
 
     const fullHtml = buildHtmlDocument({ title, logoUrl, bodyHtml });
 
-const headless =
-  typeof chromium.headless === "boolean"
-    ? chromium.headless
-    : String(chromium.headless).toLowerCase() !== "false";
+    // Optional: prevent GPU-related hangs (if supported by your chromium package version)
+    if (typeof chromium.setGraphicsMode === "function") {
+      chromium.setGraphicsMode(false);
+    }
 
-const browser = await playwrightChromium.launch({
-  args: chromium.args,
-  executablePath: await chromium.executablePath(),
-  headless
-});
+    const executablePath = await chromium.executablePath();
+    const execDir = path.dirname(executablePath);
+
+    // ✅ CRITICAL FIX: tell the loader where the extracted libs are (libnss3.so etc.)
+    process.env.LD_LIBRARY_PATH = execDir;
+
+    const headless =
+      typeof chromium.headless === "boolean"
+        ? chromium.headless
+        : String(chromium.headless).toLowerCase() !== "false";
+
+    const browser = await playwrightChromium.launch({
+      args: chromium.args,
+      executablePath,
+      headless,
+    });
 
     const page = await browser.newPage();
 
-    // Load document (wait for remote logo/fonts)
-    await page.setContent(fullHtml, { waitUntil: "networkidle" });
+    // networkidle can sometimes hang if something keeps a connection open;
+    // load is often enough for PDFs
+    await page.setContent(fullHtml, { waitUntil: "load" });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
