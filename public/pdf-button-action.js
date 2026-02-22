@@ -1,5 +1,8 @@
+// public/pdf-button-action.v3.js
 (() => {
-  function $(id) { return document.getElementById(id); }
+  function $(id) {
+    return document.getElementById(id);
+  }
 
   const cfg = {
     gradingBase: "https://voice-patient-web.vercel.app",
@@ -34,32 +37,42 @@
     return await resp.blob();
   }
 
-  // Keep a persistent "last PDF" blob URL until replaced (prevents missing the download)
+  function getSessionId() {
+    const qs = new URLSearchParams(window.location.search);
+    return (qs.get("sessionId") || "").trim();
+  }
+
+  // Keep last PDF alive in THIS TAB until replaced, so users can "view again"
   let lastPdfUrl = null;
 
   function publishPdf(blob, filename) {
-    // Revoke previous URL if we have one
+    // Replace any previous blob URL
     if (lastPdfUrl) {
-      try { URL.revokeObjectURL(lastPdfUrl); } catch {}
+      try {
+        URL.revokeObjectURL(lastPdfUrl);
+      } catch {}
       lastPdfUrl = null;
     }
 
     const url = URL.createObjectURL(blob);
     lastPdfUrl = url;
 
-    // Optional: expose a "View last PDF" link if it exists on the page
+    // Optional: expose a "View last PDF" link if present on the page
     const link = $("lastPdfLink");
     if (link) {
       link.href = url;
       link.target = "_blank";
       link.rel = "noopener";
-      link.style.display = ""; // if you hide it by default, it will show
+      // if you hide it by default, this will show it
+      link.style.display = "";
     }
 
-    // Open in a new tab so the user can see it immediately
-    try { window.open(url, "_blank", "noopener"); } catch {}
+    // Open so the user sees it immediately
+    try {
+      window.open(url, "_blank", "noopener");
+    } catch {}
 
-    // Trigger download
+    // Also trigger download
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
@@ -68,54 +81,24 @@
     a.remove();
   }
 
-  function getSessionId() {
-    const qs = new URLSearchParams(window.location.search);
-    return (qs.get("sessionId") || "").trim();
-  }
-
-  // Cache grading so download click is faster
+  // Cache grading ONLY after first click (no load-time prefetch, avoids slowing grading display)
   let cachedSessionId = "";
   let cachedGradingText = "";
-
-  async function warmGradingCache() {
-    const sessionId = getSessionId();
-    if (!sessionId) return;
-
-    // If session changed, clear cache
-    if (cachedSessionId !== sessionId) {
-      cachedSessionId = sessionId;
-      cachedGradingText = "";
-    }
-
-    if (cachedGradingText.trim()) return; // already cached
-
-    const gradingUrl =
-      `${cfg.gradingBase}/api/get-grading?sessionId=${encodeURIComponent(sessionId)}&force=1`;
-
-    const t0 = performance.now();
-    const gData = await fetchJson(gradingUrl);
-    const t1 = performance.now();
-    console.log("[pdf] grading prefetch ms:", Math.round(t1 - t0));
-
-    const text = String(gData?.gradingText || "");
-    if (text.trim()) cachedGradingText = text;
-  }
 
   window.addEventListener("DOMContentLoaded", () => {
     const downloadBtn = $("downloadPdfBtn");
     const closeBtn = $("closeTabBtn");
     if (!downloadBtn) return;
 
-    // Warm cache immediately, and retry once shortly after (grading may arrive a moment later)
-    warmGradingCache().catch(() => {});
-    setTimeout(() => warmGradingCache().catch(() => {}), 2500);
-
+    // Close tab (reliable only if opened by JS)
     if (closeBtn) {
       closeBtn.addEventListener("click", () => {
         const openedByScript = window.opener && !window.opener.closed;
         window.close();
         if (!openedByScript) {
-          alert("If this tab doesn't close automatically, your browser blocks it. Please close the tab manually.");
+          alert(
+            "If this tab doesn't close automatically, your browser blocks it. Please close the tab manually."
+          );
         }
       });
     }
@@ -140,8 +123,9 @@
       }
 
       const filename = `grading-${sessionId}.pdf`;
-      const gradingUrl =
-        `${cfg.gradingBase}/api/get-grading?sessionId=${encodeURIComponent(sessionId)}&force=1`;
+      const gradingUrl = `${cfg.gradingBase}/api/get-grading?sessionId=${encodeURIComponent(
+        sessionId
+      )}&force=1`;
 
       const total0 = performance.now();
 
@@ -157,14 +141,15 @@
           const g0 = performance.now();
           const gData = await fetchJson(gradingUrl);
           const g1 = performance.now();
-          console.log("[pdf] grading fetch ms:", Math.round(g1 - g0));
+          console.log("[pdf] grading fetch ms:", Math.round(g1 - g0), "status ok");
 
           gradingText = String(gData?.gradingText || "");
           if (!gradingText.trim()) throw new Error("Grading text was empty.");
+
           cachedGradingText = gradingText;
         }
 
-        // 2) Generate PDF (server-side)
+        // 2) Generate PDF (server-side, real text)
         downloadBtn.textContent = "Generating PDF…";
         const p0 = performance.now();
         const blob = await postPdf(cfg.pdfService, {
@@ -175,12 +160,11 @@
         });
         const p1 = performance.now();
 
-        console.log("[pdf] pdf POST+blob ms:", Math.round(p1 - p0), "bytes:", blob.size);
-
-        // 3) Publish (open tab + persistent link + download)
-        publishPdf(blob, filename);
-
+        console.log("[pdf] pdf request+blob ms:", Math.round(p1 - p0), "bytes:", blob.size);
         console.log("[pdf] total click ms:", Math.round(performance.now() - total0));
+
+        // 3) Open tab + optional "View last PDF" link + download
+        publishPdf(blob, filename);
       } catch (e) {
         console.error(e);
         alert(e?.message || "Couldn't generate the PDF. Try again.");
